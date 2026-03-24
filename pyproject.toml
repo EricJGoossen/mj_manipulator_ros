@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mj-manipulator-ros"
+version = "0.1.0"
+description = "Generic ROS 2 bridge for mj_manipulator — HardwareContext, mock node, trajectory conversion"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "mj-manipulator",
+    # rclpy, control_msgs, sensor_msgs, trajectory_msgs, std_msgs
+    # come from the system ROS 2 install (apt install ros-humble-desktop)
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.uv.sources]
+mj-manipulator = { workspace = true }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+lint.select = ["F", "E", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
