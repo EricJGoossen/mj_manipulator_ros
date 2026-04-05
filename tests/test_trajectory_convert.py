@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Tests for Trajectory <-> JointTrajectory conversion.
 
 These tests verify the data bridge between mj_manipulator and ROS 2
@@ -10,7 +13,7 @@ import numpy as np
 import pytest
 from mj_manipulator.trajectory import Trajectory
 
-from tests.conftest import HAS_ROS2, requires_ros2
+from tests.conftest import HAS_ROS2
 
 if not HAS_ROS2:
     pytest.skip("ROS 2 not installed", allow_module_level=True)
@@ -49,7 +52,9 @@ class TestTrajectoryToMsg:
 
         for i in range(traj.num_waypoints):
             np.testing.assert_allclose(
-                msg.points[i].positions, traj.positions[i], atol=1e-10,
+                msg.points[i].positions,
+                traj.positions[i],
+                atol=1e-10,
             )
 
     def test_timestamps_preserved(self):
@@ -75,13 +80,19 @@ class TestMsgToTrajectory:
         recovered = msg_to_trajectory(msg, entity="left")
 
         np.testing.assert_allclose(
-            recovered.positions, original.positions, atol=1e-6,
+            recovered.positions,
+            original.positions,
+            atol=1e-6,
         )
         np.testing.assert_allclose(
-            recovered.velocities, original.velocities, atol=1e-6,
+            recovered.velocities,
+            original.velocities,
+            atol=1e-6,
         )
         np.testing.assert_allclose(
-            recovered.timestamps, original.timestamps, atol=1e-6,
+            recovered.timestamps,
+            original.timestamps,
+            atol=1e-6,
         )
         assert recovered.entity == "left"
         assert recovered.joint_names == original.joint_names

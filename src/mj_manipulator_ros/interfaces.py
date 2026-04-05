@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """ROS 2 interface names and conventions.
 
 All interfaces use standard ROS 2 message types — no custom messages.

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Generic ROS 2 bridge for mj_manipulator.
 
 Provides HardwareContext (ExecutionContext implementation) that talks to

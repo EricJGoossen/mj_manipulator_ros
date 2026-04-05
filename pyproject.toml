@@ -6,7 +6,15 @@ build-backend = "setuptools.build_meta"
 name = "mj-manipulator-ros"
 version = "0.1.0"
 description = "Generic ROS 2 bridge for mj_manipulator — HardwareContext, mock node, trajectory conversion"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"},
+]
+maintainers = [
+    {name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"},
+]
 dependencies = [
     "numpy",
     "mj-manipulator",
@@ -23,8 +31,20 @@ mj-manipulator = { workspace = true }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[project.urls]
+Homepage = "https://github.com/personalrobotics/mj_manipulator_ros"
+Repository = "https://github.com/personalrobotics/mj_manipulator_ros"
+Issues = "https://github.com/personalrobotics/mj_manipulator_ros/issues"
+
 [tool.ruff]
-lint.select = ["F", "E", "W", "I"]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/mj_manipulator_ros/__init__.py" = ["F401"]
+"src/mj_manipulator_ros/**/__init__.py" = ["F401"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

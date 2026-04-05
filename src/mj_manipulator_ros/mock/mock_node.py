@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """MuJoCo mock ROS 2 node.
 
 Serves the same ROS 2 interfaces as real hardware (FollowJointTrajectory,
@@ -62,15 +65,20 @@ class MockRobotNode(rclpy.node.Node):
 
         # Joint state publisher
         self._joint_state_pub = self.create_publisher(
-            JointState, JOINT_STATES_TOPIC, 10,
+            JointState,
+            JOINT_STATES_TOPIC,
+            10,
         )
         self._timer = self.create_timer(
-            1.0 / publish_rate, self._publish_joint_states,
+            1.0 / publish_rate,
+            self._publish_joint_states,
         )
 
         # Robot status publisher (always True for mock)
         self._status_pub = self.create_publisher(
-            Bool, ROBOT_STATUS_TOPIC, 10,
+            Bool,
+            ROBOT_STATUS_TOPIC,
+            10,
         )
         self._status_timer = self.create_timer(1.0, self._publish_status)
 
@@ -106,7 +114,8 @@ class MockRobotNode(rclpy.node.Node):
             trajectory_msg = goal_handle.request.trajectory
             logger.info(
                 "Executing trajectory on %s (%d points)",
-                arm_name, len(trajectory_msg.points),
+                arm_name,
+                len(trajectory_msg.points),
             )
 
             with self._lock:
@@ -130,7 +139,9 @@ class MockRobotNode(rclpy.node.Node):
         def callback(goal_handle):
             position = goal_handle.request.command.position
             logger.info(
-                "Gripper command on %s: position=%.3f", arm_name, position,
+                "Gripper command on %s: position=%.3f",
+                arm_name,
+                position,
             )
 
             with self._lock:

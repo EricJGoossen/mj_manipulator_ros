@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """MuJoCo backend for the mock node.
 
 Wraps a SimContext to provide the imperative interface the mock ROS 2
@@ -13,7 +16,6 @@ from typing import TYPE_CHECKING
 import mujoco
 import numpy as np
 from mj_manipulator.sim_context import SimContext
-from mj_manipulator.trajectory import Trajectory
 
 from mj_manipulator_ros.trajectory_convert import msg_to_trajectory
 
@@ -54,7 +56,9 @@ class MuJoCoBackend:
     def start(self) -> None:
         """Enter the SimContext."""
         self._ctx = SimContext(
-            self._model, self._data, self._arms,
+            self._model,
+            self._data,
+            self._arms,
             physics=self._physics,
             headless=not self._show_viewer,
         )
@@ -110,11 +114,18 @@ class MuJoCoBackend:
 
         for arm in self._arms.values():
             for idx in arm.joint_qpos_indices:
-                jnt_id = np.searchsorted(
-                    self._model.jnt_qposadr, idx, side="right",
-                ) - 1
+                jnt_id = (
+                    np.searchsorted(
+                        self._model.jnt_qposadr,
+                        idx,
+                        side="right",
+                    )
+                    - 1
+                )
                 name = mujoco.mj_id2name(
-                    self._model, mujoco.mjtObj.mjOBJ_JOINT, int(jnt_id),
+                    self._model,
+                    mujoco.mjtObj.mjOBJ_JOINT,
+                    int(jnt_id),
                 )
                 names.append(name or f"joint_{jnt_id}")
                 positions.append(float(self._data.qpos[idx]))

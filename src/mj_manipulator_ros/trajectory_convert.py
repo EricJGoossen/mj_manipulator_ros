@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Convert between mj_manipulator Trajectory and ROS 2 JointTrajectory.
 
 This is the data bridge between the planning stack (mj_manipulator) and

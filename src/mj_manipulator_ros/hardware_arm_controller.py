@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """ArmController implementation for real hardware via ROS 2.
 
 Implements the ArmController protocol (grasp/release) by sending

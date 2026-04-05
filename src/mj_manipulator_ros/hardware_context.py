@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """HardwareContext — ExecutionContext implementation for real robots via ROS 2.
 
 Implements the same interface as SimContext so identical user code works
@@ -88,7 +91,10 @@ class HardwareContext:
 
         # Robot status subscriber
         self._node.create_subscription(
-            Bool, ROBOT_STATUS_TOPIC, self._status_callback, 10,
+            Bool,
+            ROBOT_STATUS_TOPIC,
+            self._status_callback,
+            10,
         )
 
         # Per-arm clients
@@ -107,18 +113,22 @@ class HardwareContext:
 
             # Arm controller
             self._arm_controllers[name] = HardwareArmController(
-                arm_config, gripper_client,
+                arm_config,
+                gripper_client,
             )
 
             # Streaming publisher
             self._streaming_pubs[name] = self._node.create_publisher(
-                JointTrajectoryPoint, joint_commands_topic(name), 10,
+                JointTrajectoryPoint,
+                joint_commands_topic(name),
+                10,
             )
 
         # Spin in background thread
         self._running = True
         self._spin_thread = threading.Thread(
-            target=self._spin_loop, daemon=True,
+            target=self._spin_loop,
+            daemon=True,
         )
         self._spin_thread.start()
 
@@ -126,14 +136,10 @@ class HardwareContext:
         logger.info("Waiting for action servers...")
         for name, client in self._arm_clients.items():
             if not client.wait_for_server(timeout_sec=10.0):
-                raise TimeoutError(
-                    f"Timed out waiting for {name} trajectory action server"
-                )
+                raise TimeoutError(f"Timed out waiting for {name} trajectory action server")
         for name, client in self._gripper_clients.items():
             if not client.wait_for_server(timeout_sec=10.0):
-                raise TimeoutError(
-                    f"Timed out waiting for {name} gripper action server"
-                )
+                raise TimeoutError(f"Timed out waiting for {name} gripper action server")
 
         # Wait for joint states
         logger.info("Waiting for joint states...")

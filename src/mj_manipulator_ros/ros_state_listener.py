@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """ROS 2 joint state subscriber.
 
 Caches the latest joint positions/velocities from /joint_states,
@@ -27,7 +30,10 @@ class JointStateListener:
         self._efforts: dict[str, float] = {}
 
         self._sub = node.create_subscription(
-            JointState, JOINT_STATES_TOPIC, self._callback, 10,
+            JointState,
+            JOINT_STATES_TOPIC,
+            self._callback,
+            10,
         )
 
     def _callback(self, msg: JointState) -> None:

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """Entry point for the MuJoCo mock robot node.
 
 Usage:
@@ -29,22 +32,23 @@ def main():
     data = mujoco.MjData(model)
 
     # Import here to avoid importing mj_manipulator at module level
-    from mj_manipulator import Arm
-    from mj_manipulator.config import ArmConfig, KinematicLimits
-    from mj_manipulator.arms.ur5e import UR5E_VELOCITY_LIMITS, UR5E_ACCELERATION_LIMITS
 
     # Build arms from model (simplified — real usage would pass proper configs)
     arms = {}
     for arm_name in args.arms:
         # This is a minimal example — real setup would use proper joint configs
-        print(f"Note: arm '{arm_name}' setup requires proper ArmConfig. "
-              f"Use geodude_hardware for Geodude-specific configuration.")
+        print(
+            f"Note: arm '{arm_name}' setup requires proper ArmConfig. "
+            f"Use geodude_hardware for Geodude-specific configuration."
+        )
 
-    from mj_manipulator_ros.mock.mujoco_backend import MuJoCoBackend
     from mj_manipulator_ros.mock.mock_node import MockRobotNode
+    from mj_manipulator_ros.mock.mujoco_backend import MuJoCoBackend
 
     backend = MuJoCoBackend(
-        model, data, arms,
+        model,
+        data,
+        arms,
         physics=True,
         show_viewer=args.viewer,
     )

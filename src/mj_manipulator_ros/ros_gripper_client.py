@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """ROS 2 action client for GripperCommand.
 
 Wraps the standard gripper action interface for grasp/release operations.
@@ -25,7 +28,9 @@ class GripperClient:
         self._action_name = gripper_command_action(arm_name)
 
         self._client = ActionClient(
-            node, GripperCommand, self._action_name,
+            node,
+            GripperCommand,
+            self._action_name,
         )
 
     def wait_for_server(self, timeout_sec: float = 5.0) -> bool:
@@ -62,7 +67,9 @@ class GripperClient:
 
         result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(
-            self._node, result_future, timeout_sec=timeout_sec,
+            self._node,
+            result_future,
+            timeout_sec=timeout_sec,
         )
 
         result = result_future.result()

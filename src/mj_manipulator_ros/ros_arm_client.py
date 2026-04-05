@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Siddhartha Srinivasa
+
 """ROS 2 action client for FollowJointTrajectory.
 
 Wraps the standard ros2_control action interface for sending joint
@@ -27,7 +30,9 @@ class ArmTrajectoryClient:
         self._action_name = follow_joint_trajectory_action(arm_name)
 
         self._client = ActionClient(
-            node, FollowJointTrajectory, self._action_name,
+            node,
+            FollowJointTrajectory,
+            self._action_name,
         )
 
     def wait_for_server(self, timeout_sec: float = 5.0) -> bool:
@@ -55,8 +60,7 @@ class ArmTrajectoryClient:
             "Sending trajectory to %s (%d points, %.2fs)",
             self._action_name,
             len(trajectory_msg.points),
-            trajectory_msg.points[-1].time_from_start.sec
-            + trajectory_msg.points[-1].time_from_start.nanosec * 1e-9
+            trajectory_msg.points[-1].time_from_start.sec + trajectory_msg.points[-1].time_from_start.nanosec * 1e-9
             if trajectory_msg.points
             else 0.0,
         )
@@ -71,7 +75,9 @@ class ArmTrajectoryClient:
 
         result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(
-            self._node, result_future, timeout_sec=timeout_sec,
+            self._node,
+            result_future,
+            timeout_sec=timeout_sec,
         )
 
         result = result_future.result()
@@ -83,7 +89,8 @@ class ArmTrajectoryClient:
         if error_code != FollowJointTrajectory.Result.SUCCESSFUL:
             logger.warning(
                 "Trajectory execution failed on %s: error_code=%d",
-                self._action_name, error_code,
+                self._action_name,
+                error_code,
             )
             return False
 
