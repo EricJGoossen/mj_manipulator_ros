@@ -1,0 +1,16 @@
+<mujoco model="minimal_mock_arm">
+  <compiler angle="radian"/>
+  <worldbody>
+    <body name="base" pos="0 0 0">
+      <geom type="sphere" size="0.02" rgba="0.8 0.8 0.8 1"/>
+      <body name="link0" pos="0 0 0">
+        <joint name="left_j0" type="hinge" axis="0 1 0" range="-3.14 3.14"/>
+        <geom type="capsule" fromto="0 0 0 0.1 0 0" size="0.03"/>
+        <body name="link1" pos="0.1 0 0">
+          <joint name="left_j1" type="hinge" axis="0 1 0" range="-3.14 3.14"/>
+          <geom type="capsule" fromto="0 0 0 0.1 0 0" size="0.03"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

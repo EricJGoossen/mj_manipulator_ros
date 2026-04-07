@@ -3,9 +3,13 @@
 
 """MuJoCo mock ROS 2 node.
 
-Serves the same ROS 2 interfaces as real hardware (FollowJointTrajectory,
-GripperCommand, /joint_states) but drives a MuJoCo simulation instead.
-From HardwareContext's perspective, this is indistinguishable from a real robot.
+Serves the same ROS 2 interfaces as real hardware — FollowJointTrajectory (bimanual
+``scaled_joint_trajectory_controller`` path), GripperCommand, ``/joint_states``,
+``controller_manager`` list/switch services, and ``forward_position_controller/commands``
+streaming when the backend implements
+:meth:`~mj_manipulator_ros.mock.kinematic_backend.KinematicMockBackend.apply_forward_position`.
+From HardwareContext's perspective, this is indistinguishable from a real robot when
+names match :mod:`mj_manipulator_ros.interfaces`.
 
 Usage:
     ros2 run mj_manipulator_ros mock_node --ros-args -p model_path:=path/to/model.xml
@@ -17,6 +21,7 @@ import logging
 import threading
 from typing import TYPE_CHECKING
 
+import numpy as np
 import rclpy
 import rclpy.node
 from control_msgs.action import FollowJointTrajectory, GripperCommand
@@ -27,17 +32,23 @@ try:
 except ImportError:
     # Older RoboStack builds don't have callback_group as a separate module
     ReentrantCallbackGroup = None
+from controller_manager_msgs.msg import ControllerState
+from controller_manager_msgs.srv import ListControllers, SwitchController
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64MultiArray
 
 from mj_manipulator_ros.interfaces import (
+    FORWARD_POSITION_CONTROLLER,
     JOINT_STATES_TOPIC,
     ROBOT_STATUS_TOPIC,
+    SCALED_JOINT_TRAJECTORY_CONTROLLER,
     follow_joint_trajectory_action,
+    forward_position_commands_topic,
     gripper_command_action,
 )
 
 if TYPE_CHECKING:
+    from mj_manipulator_ros.mock.kinematic_backend import KinematicMockBackend
     from mj_manipulator_ros.mock.mujoco_backend import MuJoCoBackend
 
 logger = logging.getLogger(__name__)
@@ -54,14 +65,16 @@ class MockRobotNode(rclpy.node.Node):
 
     def __init__(
         self,
-        backend: MuJoCoBackend,
+        backend: MuJoCoBackend | KinematicMockBackend,
         arm_names: list[str],
         publish_rate: float = 500.0,
+        *,
+        node_name: str = "mock_robot",
     ):
-        super().__init__("mock_robot")
+        super().__init__(node_name)
         self._backend = backend
         self._lock = threading.Lock()
-        self._cb_group = ReentrantCallbackGroup()
+        self._cb_group = ReentrantCallbackGroup() if ReentrantCallbackGroup is not None else None
 
         # Joint state publisher
         self._joint_state_pub = self.create_publisher(
@@ -85,6 +98,11 @@ class MockRobotNode(rclpy.node.Node):
         # Per-arm action servers
         self._traj_servers: dict[str, ActionServer] = {}
         self._gripper_servers: dict[str, ActionServer] = {}
+        # Mirrors ros2_control so HardwareContext can switch JTC <-> forward position.
+        self._active_controller: dict[str, str] = {
+            n: FORWARD_POSITION_CONTROLLER for n in arm_names
+        }
+        self._fpc_subs: list = []
 
         for arm_name in arm_names:
             # FollowJointTrajectory
@@ -104,6 +122,29 @@ class MockRobotNode(rclpy.node.Node):
                 execute_callback=self._make_gripper_callback(arm_name),
                 callback_group=self._cb_group,
             )
+
+            self.create_service(
+                ListControllers,
+                f"/{arm_name}/controller_manager/list_controllers",
+                self._make_list_controllers_cb(arm_name),
+            )
+            self.create_service(
+                SwitchController,
+                f"/{arm_name}/controller_manager/switch_controller",
+                self._make_switch_controller_cb(arm_name),
+            )
+
+            if hasattr(backend, "apply_forward_position"):
+                topic = forward_position_commands_topic(arm_name)
+                self._fpc_subs.append(
+                    self.create_subscription(
+                        Float64MultiArray,
+                        topic,
+                        self._make_fpc_callback(arm_name),
+                        10,
+                    ),
+                )
+                logger.info("Subscribed to streaming commands: %s", topic)
 
         logger.info("MockRobotNode ready with arms: %s", arm_names)
 
@@ -159,6 +200,59 @@ class MockRobotNode(rclpy.node.Node):
             return result
 
         return callback
+
+    def _make_list_controllers_cb(self, arm_name: str):
+        def cb(_request: ListControllers.Request, response: ListControllers.Response):
+            jtc = ControllerState()
+            jtc.name = SCALED_JOINT_TRAJECTORY_CONTROLLER
+            jtc.state = (
+                "active"
+                if self._active_controller.get(arm_name) == SCALED_JOINT_TRAJECTORY_CONTROLLER
+                else "inactive"
+            )
+            jtc.type = "joint_trajectory_controller/JointTrajectoryController"
+
+            fpc = ControllerState()
+            fpc.name = FORWARD_POSITION_CONTROLLER
+            fpc.state = (
+                "active"
+                if self._active_controller.get(arm_name) == FORWARD_POSITION_CONTROLLER
+                else "inactive"
+            )
+            fpc.type = "position_controllers/ForwardCommandController"
+
+            response.controller = [jtc, fpc]
+            return response
+
+        return cb
+
+    def _make_switch_controller_cb(self, arm_name: str):
+        def cb(request: SwitchController.Request, response: SwitchController.Response):
+            activate = list(request.activate_controllers)
+            deactivate = list(request.deactivate_controllers)
+            logger.info(
+                "Mock switch_controller %s: +%s -%s",
+                arm_name,
+                activate,
+                deactivate,
+            )
+            if activate:
+                # HardwareContext activates one trajectory or one forward controller at a time.
+                name = activate[0]
+                if name in (SCALED_JOINT_TRAJECTORY_CONTROLLER, FORWARD_POSITION_CONTROLLER):
+                    self._active_controller[arm_name] = name
+            response.ok = True
+            return response
+
+        return cb
+
+    def _make_fpc_callback(self, arm_name: str):
+        def cb(msg: Float64MultiArray):
+            arr = np.asarray(msg.data, dtype=float)
+            with self._lock:
+                self._backend.apply_forward_position(arm_name, arr)
+
+        return cb
 
     def _publish_joint_states(self) -> None:
         """Publish current joint state from MuJoCo."""

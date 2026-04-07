@@ -22,10 +22,16 @@ logger = logging.getLogger(__name__)
 class GripperClient:
     """Action client for controlling a gripper."""
 
-    def __init__(self, node: rclpy.node.Node, arm_name: str):
+    def __init__(
+        self,
+        node: rclpy.node.Node,
+        arm_name: str,
+        *,
+        action_name: str | None = None,
+    ):
         self._node = node
         self._arm_name = arm_name
-        self._action_name = gripper_command_action(arm_name)
+        self._action_name = action_name or gripper_command_action(arm_name)
 
         self._client = ActionClient(
             node,

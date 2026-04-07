@@ -17,6 +17,7 @@ maintainers = [
 ]
 dependencies = [
     "numpy",
+    "PyYAML>=6.0",
     "mj-manipulator",
     # rclpy, control_msgs, sensor_msgs, trajectory_msgs, std_msgs
     # come from the system ROS 2 install (apt install ros-humble-desktop)
@@ -45,6 +46,8 @@ select = ["F", "E", "W", "I"]
 [tool.ruff.lint.per-file-ignores]
 "src/mj_manipulator_ros/__init__.py" = ["F401"]
 "src/mj_manipulator_ros/**/__init__.py" = ["F401"]
+"tests/test_gripper.py" = ["E402"]
+"tests/test_hardware_context.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

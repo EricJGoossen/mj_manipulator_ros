@@ -17,6 +17,16 @@ class ArmHardwareConfig:
     has_gripper: bool = True
     gripper_open: float = 0.0
     gripper_closed: float = 0.255  # Robotiq 2F-140 max travel (meters)
+    #: ros2_control trajectory controller name (e.g. scaled_joint_trajectory_controller)
+    joint_trajectory_controller: str = "scaled_joint_trajectory_controller"
+    #: Full FollowJointTrajectory action name; if None, use package default pattern.
+    follow_joint_trajectory_action: str | None = None
+    #: Full GripperCommand action name; if None, use package default pattern.
+    gripper_command_action: str | None = None
+    #: ros2_control forward position streaming topic (Float64MultiArray); if None, derived from name.
+    forward_position_commands_topic: str | None = None
+    #: Controller name for streaming joint position targets
+    forward_position_controller: str = "forward_position_controller"
 
 
 @dataclass
