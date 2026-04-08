@@ -27,6 +27,10 @@ class ArmHardwareConfig:
     forward_position_commands_topic: str | None = None
     #: Controller name for streaming joint position targets
     forward_position_controller: str = "forward_position_controller"
+    #: ros2_control forward velocity streaming topic (Float64MultiArray); if None, derived from name.
+    forward_velocity_commands_topic: str | None = None
+    #: Controller name for streaming joint velocity targets
+    forward_velocity_controller: str = "forward_velocity_controller"
 
 
 @dataclass
@@ -41,3 +45,4 @@ class HardwareConfig:
     control_dt: float = 0.002  # 500 Hz (UR RTDE default)
     action_timeout: float = 30.0  # Seconds to wait for trajectory execution
     speed_scale: float = 1.0  # Velocity scaling factor (0.0-1.0)
+    default_streaming_controller: str = "forward_position_controller"

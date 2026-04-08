@@ -51,10 +51,12 @@ from mj_manipulator_ros.config import HardwareConfig
 from mj_manipulator_ros.hardware_arm_controller import HardwareArmController
 from mj_manipulator_ros.interfaces import (
     FORWARD_POSITION_CONTROLLER,
+    FORWARD_VELOCITY_CONTROLLER,
     ROBOT_STATUS_TOPIC,
     SCALED_JOINT_TRAJECTORY_CONTROLLER,
     follow_joint_trajectory_action,
     forward_position_commands_topic,
+    forward_velocity_commands_topic,
     gripper_command_action,
 )
 from mj_manipulator_ros.ros_arm_client import ArmTrajectoryClient
@@ -67,6 +69,61 @@ if TYPE_CHECKING:
     from mj_manipulator.trajectory import Trajectory
 
 logger = logging.getLogger(__name__)
+
+def _mujoco_to_ros_joint_name(name: str) -> str:
+    """Best-effort mapping for Geodude-style MuJoCo joint names to bimanual ROS names.
+
+    Examples:
+        ``left_ur5e/shoulder_pan_joint`` -> ``left_shoulder_pan_joint``
+        ``right_ur5e/wrist_3_joint`` -> ``right_wrist_3_joint``
+
+    If the name already looks like a ROS joint (no ``/``), it is returned unchanged.
+    """
+    if "/" not in name:
+        return name
+    # Common Geodude convention: {side}_ur5e/{suffix}
+    if "_ur5e/" in name:
+        return name.replace("_ur5e/", "_")
+    # Fallback: make it a flat ROS-ish token.
+    return name.replace("/", "_")
+
+
+def _map_joint_names(names: list[str], mapping: dict[str, str]) -> list[str]:
+    """Map each joint name via dict, defaulting to heuristic passthrough."""
+    return [mapping.get(n, _mujoco_to_ros_joint_name(n)) for n in names]
+
+
+def _reorder_vector(
+    *,
+    provided_joint_names: list[str],
+    provided_values: np.ndarray,
+    desired_joint_names: list[str],
+    name_map: dict[str, str],
+) -> np.ndarray:
+    """Reorder a joint vector by name.
+
+    Args:
+        provided_joint_names: Joint names corresponding to provided_values. Can be ROS names
+            (e.g. ``left_shoulder_pan_joint``) or MuJoCo-style names (e.g. ``left_ur5e/...``).
+        provided_values: Joint values aligned with provided_joint_names.
+        desired_joint_names: Desired joint name ordering (ROS / controller order).
+        name_map: Per-arm mapping from config joint names to ROS names.
+
+    Returns:
+        Values reordered into desired_joint_names order.
+    """
+    prov_ros = _map_joint_names(list(provided_joint_names), name_map)
+    desired_ros = _map_joint_names(list(desired_joint_names), name_map)
+    v = np.asarray(provided_values, dtype=float).ravel()
+    if v.size != len(prov_ros):
+        raise ValueError(
+            f"Expected {len(prov_ros)} values for joints {prov_ros}, got {v.size}",
+        )
+    index = {n: i for i, n in enumerate(prov_ros)}
+    missing = [n for n in desired_ros if n not in index]
+    if missing:
+        raise ValueError(f"Missing joints in streaming target: {missing}")
+    return np.asarray([v[index[n]] for n in desired_ros], dtype=float)
 
 
 def _wait(future, timeout_sec: float = 30.0):
@@ -94,6 +151,7 @@ class HardwareContext:
         *,
         ssot_path: str | Path | None = None,
         node_name: str = "hardware_context",
+        default_streaming_controller: str | None = None,
     ):
         if ssot_path is not None:
             with open(Path(ssot_path), encoding="utf-8") as f:
@@ -107,6 +165,8 @@ class HardwareContext:
             if config is None:
                 raise ValueError("Provide ``config`` or ``ssot_path``")
 
+        if default_streaming_controller is not None:
+            config.default_streaming_controller = default_streaming_controller
         self._config = config
         self._node_name = node_name
 
@@ -117,11 +177,22 @@ class HardwareContext:
         self._gripper_clients: dict[str, GripperClient] = {}
         self._arm_controllers: dict[str, HardwareArmController] = {}
         self._streaming_pubs: dict[str, object] = {}
+        self._streaming_vel_pubs: dict[str, object] = {}
         self._switch_clients: dict[str, object] = {}
         self._list_clients: dict[str, object] = {}
         self._active_controller: dict[str, str | None] = {}
+        # Per-arm mapping from configured joint names -> ROS /joint_states names.
+        # This allows configs to use MuJoCo-style names (e.g. left_ur5e/...) while the
+        # joint state stream uses bimanual ros2_control names (left_...).
+        self._joint_name_map: dict[str, dict[str, str]] = {}
         self._robot_status = True
         self._running = False
+        # Per-arm spacing between consecutive ``step_cartesian`` calls (same arm_name).
+        self._step_cartesian_prev_time: dict[str, float] = {}
+        self._step_cartesian_last_dt: dict[str, float] = {}
+        self._step_cartesian_last_hz: dict[str, float] = {}
+        # Throttle stdout FPS prints (one line per arm per second at most).
+        self._step_cartesian_fps_print_at: dict[str, float] = {}
 
     @property
     def named_poses(self) -> dict[str, dict[str, list[float]]]:
@@ -146,6 +217,10 @@ class HardwareContext:
 
         for arm_config in self._config.arms:
             name = arm_config.name
+            # Build per-arm joint-name map (config name -> ROS joint name).
+            self._joint_name_map[name] = {
+                j: _mujoco_to_ros_joint_name(j) for j in arm_config.joint_names
+            }
             fjt = arm_config.follow_joint_trajectory_action or follow_joint_trajectory_action(
                 name,
                 trajectory_controller=arm_config.joint_trajectory_controller,
@@ -178,6 +253,23 @@ class HardwareContext:
             self._streaming_pubs[name] = self._node.create_publisher(
                 Float64MultiArray,
                 stream_topic,
+                10,
+            )
+
+            # Velocity streaming (Float64MultiArray). Useful for teleop without
+            # fighting scaled_joint_trajectory_controller which claims position interfaces.
+            if getattr(arm_config, "forward_velocity_commands_topic", None):
+                vel_topic = arm_config.forward_velocity_commands_topic
+            elif (
+                getattr(arm_config, "forward_velocity_controller", FORWARD_VELOCITY_CONTROLLER)
+                == FORWARD_VELOCITY_CONTROLLER
+            ):
+                vel_topic = forward_velocity_commands_topic(name)
+            else:
+                vel_topic = f"/{name}/{arm_config.forward_velocity_controller}/commands"
+            self._streaming_vel_pubs[name] = self._node.create_publisher(
+                Float64MultiArray,
+                vel_topic,
                 10,
             )
 
@@ -217,14 +309,29 @@ class HardwareContext:
 
         logger.info("Waiting for joint states...")
         deadline = time.time() + 10.0
+        # Wait until at least one joint state arrives (synchronized /joint_states).
         while not self._state_listener.has_data and time.time() < deadline:
             time.sleep(0.01)
         if not self._state_listener.has_data:
             raise TimeoutError("Timed out waiting for /joint_states")
+        # Additionally, ensure all configured joints have been observed at least once.
+        required_ros_joints: list[str] = []
+        for arm_cfg in self._config.arms:
+            required_ros_joints.extend(
+                _map_joint_names(arm_cfg.joint_names, self._joint_name_map.get(arm_cfg.name, {})),
+            )
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            if self._state_listener.get_positions(required_ros_joints) is not None:
+                break
+            time.sleep(0.01)
 
-        # Default to forward position so streaming never pays a switch on first step.
+        # Default streaming controller: position (typical) or velocity (teleop-friendly).
         for name in self._arm_clients:
-            self._ensure_forward_position_controller(name)
+            if self._config.default_streaming_controller == FORWARD_VELOCITY_CONTROLLER:
+                self._ensure_forward_velocity_controller(name)
+            else:
+                self._ensure_forward_position_controller(name)
             logger.info(
                 "%s: default active controller (streaming) = %s",
                 name,
@@ -297,23 +404,39 @@ class HardwareContext:
         """Ensure scaled (or configured) joint trajectory controller is active."""
         arm_cfg = next(a for a in self._config.arms if a.name == arm_name)
         jtc = arm_cfg.joint_trajectory_controller
+        fpc = arm_cfg.forward_position_controller
         if self._active_controller.get(arm_name) == jtc:
             return
-        current = self._active_controller.get(arm_name)
-        deactivate = [current] if current else []
-        self._switch_controller(arm_name, activate=[jtc], deactivate=deactivate)
+        # Trajectory and forward-position controllers both claim the same joint command
+        # interfaces; always deactivate the paired controller explicitly. Relying on
+        # cached ``_active_controller`` alone can leave FPC active and make JTC
+        # activation fail with "already claimed" (seen when switching modes).
+        self._switch_controller(arm_name, activate=[jtc], deactivate=[fpc])
         self._active_controller[arm_name] = jtc
 
     def _ensure_forward_position_controller(self, arm_name: str) -> None:
         """Activate forward_position_controller (default for streaming)."""
         arm_cfg = next(a for a in self._config.arms if a.name == arm_name)
         fpc = arm_cfg.forward_position_controller
+        jtc = arm_cfg.joint_trajectory_controller
         if self._active_controller.get(arm_name) == fpc:
             return
-        current = self._active_controller.get(arm_name)
-        deactivate = [current] if current else []
-        self._switch_controller(arm_name, activate=[fpc], deactivate=deactivate)
+        self._switch_controller(arm_name, activate=[fpc], deactivate=[jtc])
         self._active_controller[arm_name] = fpc
+
+    def _ensure_forward_velocity_controller(self, arm_name: str) -> None:
+        """Activate forward_velocity_controller for streaming joint velocities.
+
+        This lets scaled JTC remain active (position interfaces) while streaming
+        commands on velocity interfaces, avoiding JTC/FPC resource conflicts.
+        """
+        arm_cfg = next(a for a in self._config.arms if a.name == arm_name)
+        fvc = arm_cfg.forward_velocity_controller
+        fpc = arm_cfg.forward_position_controller
+        if self._active_controller.get(arm_name) == fvc:
+            return
+        self._switch_controller(arm_name, activate=[fvc], deactivate=[fpc])
+        self._active_controller[arm_name] = fvc
 
     # -- ExecutionContext protocol -------------------------------------------
 
@@ -333,13 +456,32 @@ class HardwareContext:
             raise TypeError(f"Cannot execute {type(item)}")
 
     def step(self, targets: dict[str, np.ndarray] | None = None) -> None:
-        """Publish streaming joint commands for one control cycle."""
+        """Publish streaming joint commands for one control cycle.
+
+        Backwards compatible behavior:
+        - ``targets[arm] = q`` publishes q directly (assumed already in controller joint order).
+
+        Safer behavior:
+        - ``targets[arm] = (joint_names, q)`` will reorder q into the controller's expected
+          joint order using joint names (accepts MuJoCo-style names too).
+        """
         if targets:
             for name, q in targets.items():
                 pub = self._streaming_pubs.get(name)
                 if pub is not None:
                     msg = Float64MultiArray()
-                    msg.data = np.asarray(q, dtype=float).tolist()
+                    if isinstance(q, tuple):
+                        provided_names, values = q
+                        arm_cfg = next(a for a in self._config.arms if a.name == name)
+                        reordered = _reorder_vector(
+                            provided_joint_names=list(provided_names),
+                            provided_values=np.asarray(values, dtype=float),
+                            desired_joint_names=arm_cfg.joint_names,
+                            name_map=self._joint_name_map.get(name, {}),
+                        )
+                        msg.data = reordered.tolist()
+                    else:
+                        msg.data = np.asarray(q, dtype=float).tolist()
                     pub.publish(msg)
         time.sleep(self._config.control_dt)
 
@@ -348,17 +490,72 @@ class HardwareContext:
         arm_name: str,
         position: np.ndarray,
         velocity: np.ndarray | None = None,
+        *,
+        joint_names: list[str] | None = None,
     ) -> None:
-        """Publish streaming cartesian-resolved joint command."""
-        pub = self._streaming_pubs.get(arm_name)
-        if pub is not None:
-            msg = Float64MultiArray()
-            msg.data = np.asarray(position, dtype=float).tolist()
-            pub.publish(msg)
-        if velocity is not None:
-            logger.debug(
-                "step_cartesian: velocity ignored when using forward_position_controller",
-            )
+        """Publish streaming cartesian-resolved joint command.
+
+        ``position`` is published on the arm's forward-position command topic.
+        If ``joint_names`` is provided, positions are reordered into controller joint order.
+        """
+        now = time.time()
+        prev = self._step_cartesian_prev_time.get(arm_name)
+        if prev is not None:
+            dt = now - prev
+            self._step_cartesian_last_dt[arm_name] = dt
+            if dt > 0.0:
+                hz = 1.0 / dt
+                self._step_cartesian_last_hz[arm_name] = hz
+                last_print = self._step_cartesian_fps_print_at.get(arm_name, 0.0)
+                if now - last_print >= 1.0:
+                    print(f"step_cartesian[{arm_name}] {hz:.1f} Hz", flush=True)
+                    self._step_cartesian_fps_print_at[arm_name] = now
+        self._step_cartesian_prev_time[arm_name] = now
+
+        # Only use velocity streaming if the context is explicitly configured for it.
+        if (
+            velocity is not None
+            and arm_name in self._streaming_vel_pubs
+            and self._config.default_streaming_controller == FORWARD_VELOCITY_CONTROLLER
+        ):
+            self._ensure_forward_velocity_controller(arm_name)
+            pub = self._streaming_vel_pubs.get(arm_name)
+            if pub is not None:
+                msg = Float64MultiArray()
+                if joint_names is not None:
+                    arm_cfg = next(a for a in self._config.arms if a.name == arm_name)
+                    reordered = _reorder_vector(
+                        provided_joint_names=list(joint_names),
+                        provided_values=np.asarray(velocity, dtype=float),
+                        desired_joint_names=arm_cfg.joint_names,
+                        name_map=self._joint_name_map.get(arm_name, {}),
+                    )
+                    msg.data = reordered.tolist()
+                else:
+                    msg.data = np.asarray(velocity, dtype=float).tolist()
+                pub.publish(msg)
+        else:
+            if velocity is not None:
+                logger.debug("step_cartesian: velocity ignored (using forward_position_controller)")
+            # Ensure the position streaming controller is active. If another node
+            # (e.g., UR driver controller logic / MoveIt) activates JTC, publishing
+            # to the FPC topic will stop having effect unless we switch back.
+            self._ensure_forward_position_controller(arm_name)
+            pub = self._streaming_pubs.get(arm_name)
+            if pub is not None:
+                msg = Float64MultiArray()
+                if joint_names is not None:
+                    arm_cfg = next(a for a in self._config.arms if a.name == arm_name)
+                    reordered = _reorder_vector(
+                        provided_joint_names=list(joint_names),
+                        provided_values=np.asarray(position, dtype=float),
+                        desired_joint_names=arm_cfg.joint_names,
+                        name_map=self._joint_name_map.get(arm_name, {}),
+                    )
+                    msg.data = reordered.tolist()
+                else:
+                    msg.data = np.asarray(position, dtype=float).tolist()
+                pub.publish(msg)
         time.sleep(self._config.control_dt)
 
     def sync(self) -> None:
@@ -380,13 +577,23 @@ class HardwareContext:
         """Control timestep in seconds."""
         return self._config.control_dt
 
+    def step_cartesian_dt(self, arm_name: str) -> float | None:
+        """Seconds since the previous ``step_cartesian`` call for ``arm_name`` (``None`` on first call)."""
+        return self._step_cartesian_last_dt.get(arm_name)
+
+    def step_cartesian_hz(self, arm_name: str) -> float | None:
+        """Instantaneous call rate ``1/dt`` from the last pair of calls for ``arm_name``."""
+        return self._step_cartesian_last_hz.get(arm_name)
+
     # -- State access -------------------------------------------------------
 
     def get_joint_positions(self, joint_names: list[str]) -> np.ndarray | None:
         """Get latest joint positions from hardware feedback."""
         if self._state_listener is None:
             return None
-        return self._state_listener.get_positions(joint_names)
+        # Accept either ROS joint names (left_...) or MuJoCo-style names (left_ur5e/...).
+        mapped = [_mujoco_to_ros_joint_name(n) for n in joint_names]
+        return self._state_listener.get_positions(mapped)
 
     # -- Internal -----------------------------------------------------------
 
@@ -407,15 +614,24 @@ class HardwareContext:
 
         self._ensure_trajectory_controller(arm_name)
         msg = trajectory_to_msg(traj)
+        # Ensure ROS joint names match /joint_states and controller expectations.
+        # Many planners produce trajectories with MuJoCo joint names; map them.
+        msg.joint_names = _map_joint_names(
+            list(msg.joint_names),
+            self._joint_name_map.get(arm_name, {}),
+        )
         try:
             return client.send_trajectory(msg, timeout_sec=self._config.action_timeout)
         finally:
-            # Always return to forward position so streaming never stutters after a plan.
+            # Always return to the default streaming controller so streaming never stutters after a plan.
             try:
-                self._ensure_forward_position_controller(arm_name)
+                if self._config.default_streaming_controller == FORWARD_VELOCITY_CONTROLLER:
+                    self._ensure_forward_velocity_controller(arm_name)
+                else:
+                    self._ensure_forward_position_controller(arm_name)
             except Exception as e:
                 logger.warning(
-                    "%s: could not switch back to forward_position after trajectory: %s",
+                    "%s: could not switch back to default streaming controller after trajectory: %s",
                     arm_name,
                     e,
                 )

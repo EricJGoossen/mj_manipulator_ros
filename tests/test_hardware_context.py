@@ -132,6 +132,13 @@ def test_hardware_context_trajectory_and_streaming(ros_init):
             assert q2 is not None
             np.testing.assert_allclose(q2, [0.1, 0.2], atol=1e-2)
 
+            # Pass reversed joint names to exercise reordering/mapping.
+            ctx.step({arm_name: (list(reversed(joint_names)), np.array([0.42, -0.11]))})
+            time.sleep(0.05)
+            q2b = ctx.get_joint_positions(joint_names)
+            assert q2b is not None
+            np.testing.assert_allclose(q2b, [-0.11, 0.42], atol=1e-2)
+
             ctx.step_cartesian(arm_name, np.array([-0.2, 0.3]))
             time.sleep(0.05)
             q3 = ctx.get_joint_positions(joint_names)
