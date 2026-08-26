@@ -1,11 +1,23 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Siddhartha Srinivasa
 
+import threading
+
 """ROS 2 interface names and conventions.
 
 All interfaces use standard ROS 2 message types — no custom messages.
 Topic and action names are parameterized by arm name for multi-arm support.
 """
+
+def wait_for_future(future, timeout_sec: float):
+    """Block until 'future' completes, without spinning ourselfs"""
+    event = threading.Event()
+    future.add_done_callback(lambda _: event.set())
+
+    if not event.wait(timeout_sec):
+        raise TimeoutError(f"Timed out after {timeout_sec}s waiting for future")
+    
+    return future.result()
 
 
 def follow_joint_trajectory_action(arm_name: str) -> str:

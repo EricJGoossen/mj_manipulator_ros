@@ -30,7 +30,7 @@ class HardwareArmController:
         self._config = config
         self._gripper = gripper_client
 
-    def grasp(self, object_name: str) -> str | None:
+    def grasp(self, object_name: str, synchronous: bool = True) -> str | None:
         """Close gripper to grasp an object.
 
         Sends a GripperCommand to close position. On real hardware,
@@ -50,6 +50,7 @@ class HardwareArmController:
         ok = self._gripper.send_command(
             position=self._config.gripper_closed,
             max_effort=50.0,
+            synchronous=synchronous
         )
 
         if ok:
@@ -59,7 +60,7 @@ class HardwareArmController:
         logger.warning("Grasp failed for %s", object_name)
         return None
 
-    def release(self, object_name: str | None = None) -> None:
+    def release(self, object_name: str | None = None, synchronous: bool = True) -> None:
         """Open gripper to release held object(s).
 
         Args:
@@ -72,4 +73,5 @@ class HardwareArmController:
         self._gripper.send_command(
             position=self._config.gripper_open,
             max_effort=50.0,
+            synchronous=synchronous,
         )

@@ -16,7 +16,7 @@ from control_msgs.action import FollowJointTrajectory
 from rclpy.action import ActionClient
 from trajectory_msgs.msg import JointTrajectory
 
-from mj_manipulator_ros.interfaces import follow_joint_trajectory_action
+from mj_manipulator_ros.interfaces import follow_joint_trajectory_action, wait_for_future
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ class ArmTrajectoryClient:
         )
 
         future = self._client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self._node, future, timeout_sec=5.0)
+        wait_for_future(future, timeout_sec=5.0)
 
         goal_handle = future.result()
         if goal_handle is None or not goal_handle.accepted:
@@ -74,11 +74,7 @@ class ArmTrajectoryClient:
             return False
 
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(
-            self._node,
-            result_future,
-            timeout_sec=timeout_sec,
-        )
+        wait_for_future(future, timeout_sec=timeout_sec)
 
         result = result_future.result()
         if result is None:

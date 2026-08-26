@@ -14,7 +14,7 @@ import rclpy.node
 from control_msgs.action import GripperCommand
 from rclpy.action import ActionClient
 
-from mj_manipulator_ros.interfaces import gripper_command_action
+from mj_manipulator_ros.interfaces import gripper_command_action, wait_for_future
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ class GripperClient:
         position: float,
         max_effort: float = 50.0,
         timeout_sec: float = 10.0,
+        synchronous: bool = True,
     ) -> bool:
         """Send a gripper command and wait for completion.
 
@@ -58,7 +59,7 @@ class GripperClient:
         goal.command.max_effort = max_effort
 
         future = self._client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self._node, future, timeout_sec=5.0)
+        wait_for_future(future, timeout_sec=5.0)
 
         goal_handle = future.result()
         if goal_handle is None or not goal_handle.accepted:
@@ -66,14 +67,16 @@ class GripperClient:
             return False
 
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(
-            self._node,
-            result_future,
-            timeout_sec=timeout_sec,
-        )
+    
+        if not synchronous:
+            result_future.add_done_callback(
+                lambda f: logger.info(
+                    "Gripper command on %s finished (async): %s",
+                    self._action_name, "ok" if f.result() is not None else "failed/timed out"))
+            return True
 
-        result = result_future.result()
-        if result is None:
+        wait_for_future(result_future, timeout_sec=timeout_sec)
+        if result_future.result() is None:
             logger.warning("Gripper command timed out on %s", self._action_name)
             return False
 

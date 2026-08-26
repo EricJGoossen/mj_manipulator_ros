@@ -189,8 +189,6 @@ class HardwareContext:
                     point.positions = q.tolist()
                     pub.publish(point)
 
-        time.sleep(self._config.control_dt)
-
     def step_cartesian(
         self,
         arm_name: str,
@@ -205,8 +203,6 @@ class HardwareContext:
             if velocity is not None:
                 point.velocities = np.asarray(velocity).tolist()
             pub.publish(point)
-
-        time.sleep(self._config.control_dt)
 
     def sync(self) -> None:
         """Read latest joint states (no-op — listener updates continuously)."""
