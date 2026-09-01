@@ -44,37 +44,26 @@ class ArmTrajectoryClient:
         trajectory_msg: JointTrajectory,
         timeout_sec: float = 30.0,
     ) -> bool:
-        """Send a trajectory and wait for completion.
+        """Send a trajectory and block until it completes.
 
-        Args:
-            trajectory_msg: JointTrajectory to execute.
-            timeout_sec: Maximum time to wait for completion.
-
-        Returns:
-            True if trajectory executed successfully.
+        For single-arm callers with no cancellation needs. Synchronized
+        multi-arm execution uses send_goal() directly instead --
+        see HardwareContext._execute_single.
         """
-        goal = FollowJointTrajectory.Goal()
-        goal.trajectory = trajectory_msg
-
         logger.info(
             "Sending trajectory to %s (%d points, %.2fs)",
             self._action_name,
             len(trajectory_msg.points),
             trajectory_msg.points[-1].time_from_start.sec + trajectory_msg.points[-1].time_from_start.nanosec * 1e-9
-            if trajectory_msg.points
-            else 0.0,
+            if trajectory_msg.points else 0.0,
         )
 
-        future = self._client.send_goal_async(goal)
-        wait_for_future(future, timeout_sec=5.0)
-
-        goal_handle = future.result()
-        if goal_handle is None or not goal_handle.accepted:
-            logger.warning("Trajectory goal rejected by %s", self._action_name)
+        goal_handle = self.send_goal(trajectory_msg, timeout_sec=5.0)
+        if goal_handle is None:
             return False
 
         result_future = goal_handle.get_result_async()
-        wait_for_future(future, timeout_sec=timeout_sec)
+        wait_for_future(result_future, timeout_sec=timeout_sec)
 
         result = result_future.result()
         if result is None:
@@ -91,3 +80,24 @@ class ArmTrajectoryClient:
             return False
 
         return True
+
+    def send_goal(self, trajectory_msg: JointTrajectory, timeout_sec: float = 5.0):
+        """Send a trajectory and return its accepted goal handle without
+        waiting for execution to finish.
+
+        Returns None if the server rejects the goal or acceptance itself
+        times out. The caller owns waiting on goal_handle.get_result_async()
+        and may call goal_handle.cancel_goal_async() to abort mid-execution.
+        """
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory = trajectory_msg
+
+        future = self._client.send_goal_async(goal)
+        wait_for_future(future, timeout_sec=timeout_sec)
+
+        goal_handle = future.result()
+        if goal_handle is None or not goal_handle.accepted:
+            logger.warning("Trajectory goal rejected by %s", self._action_name)
+            return None
+
+        return goal_handle

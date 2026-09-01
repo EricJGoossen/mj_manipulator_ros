@@ -10,13 +10,17 @@ with no ROS node dependencies, so they're fully unit-testable.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import numpy as np
 from builtin_interfaces.msg import Duration
 from mj_manipulator.trajectory import Trajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
+if TYPE_CHECKING:
+    from builtin_interfaces.msg import Time
 
-def trajectory_to_msg(traj: Trajectory) -> JointTrajectory:
+
+def trajectory_to_msg(traj: Trajectory, start_stamp: Time | None = None) -> JointTrajectory:
     """Convert mj_manipulator Trajectory to ROS 2 JointTrajectory.
 
     Args:
@@ -36,6 +40,8 @@ def trajectory_to_msg(traj: Trajectory) -> JointTrajectory:
 
     msg = JointTrajectory()
     msg.joint_names = list(traj.joint_names)
+    if start_stamp is not None:
+        msg.header.stamp = start_stamp
 
     for i in range(traj.num_waypoints):
         point = JointTrajectoryPoint()

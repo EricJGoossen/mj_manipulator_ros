@@ -27,12 +27,15 @@ import logging
 import threading
 import time
 from typing import TYPE_CHECKING
+from collections.abc import Callable
 
 import numpy as np
 import rclpy
 import rclpy.executors
+import rclpy.duration
 from std_msgs.msg import Bool
 from trajectory_msgs.msg import JointTrajectoryPoint
+from control_msgs.action import FollowJointTrajectory
 
 from mj_manipulator_ros.config import HardwareConfig
 from mj_manipulator_ros.hardware_arm_controller import HardwareArmController
@@ -46,7 +49,7 @@ from mj_manipulator_ros.ros_state_listener import JointStateListener
 from mj_manipulator_ros.trajectory_convert import trajectory_to_msg
 
 if TYPE_CHECKING:
-    from mj_manipulator.planning import PlanResult
+    from mj_manipulator.planning import PlanResult, PlanGroupResult
     from mj_manipulator.trajectory import Trajectory
 
 logger = logging.getLogger(__name__)
@@ -102,8 +105,7 @@ class HardwareContext:
             name = arm_config.name
 
             # Trajectory action client
-            traj_client = ArmTrajectoryClient(self._node, name)
-            self._arm_clients[name] = traj_client
+            self._arm_clients[name] = ArmTrajectoryClient(self._node, name)
 
             # Gripper action client
             gripper_client = None
@@ -164,30 +166,42 @@ class HardwareContext:
 
     # -- ExecutionContext protocol -------------------------------------------
 
-    def execute(self, item: Trajectory | PlanResult) -> bool:
-        """Execute a trajectory or plan result via FollowJointTrajectory."""
-        from mj_manipulator.planning import PlanResult
+    def execute(
+        self,
+        item: Trajectory | PlanResult | PlanGroupResult,
+        *,
+        abort_fn: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Execute a trajectory or plan result via ROS 2."""
+        from mj_manipulator.planning import PlanGroupResult, PlanResult
         from mj_manipulator.trajectory import Trajectory
 
-        if isinstance(item, PlanResult):
-            for traj in item.trajectories:
-                if not self._execute_trajectory(traj):
-                    return False
-            return True
+        if isinstance(item, PlanGroupResult):
+            trajectories = [r.arm_trajectory for r in item.arm_results.values()]
+        elif isinstance(item, PlanResult):
+            trajectories = item.trajectories
         elif isinstance(item, Trajectory):
-            return self._execute_trajectory(item)
+            trajectories = [item]
         else:
             raise TypeError(f"Cannot execute {type(item)}")
 
+        return self._execute_trajectories(trajectories, abort_fn=abort_fn)
+
+
+
     def step(self, targets: dict[str, np.ndarray] | None = None) -> None:
         """Publish streaming joint commands for one control cycle."""
-        if targets:
-            for name, q in targets.items():
-                pub = self._streaming_pubs.get(name)
-                if pub is not None:
-                    point = JointTrajectoryPoint()
-                    point.positions = q.tolist()
-                    pub.publish(point)
+        if not targets:
+            return
+
+        for name, q in targets.items():
+            pub = self._streaming_pubs.get(name)
+            if pub is None:
+                raise ValueError(f"No streaming publisher for arm: {name}")
+
+            point = JointTrajectoryPoint()
+            point.positions = np.asarray(q).tolist()
+            pub.publish(point)
 
     def step_cartesian(
         self,
@@ -197,6 +211,8 @@ class HardwareContext:
     ) -> None:
         """Publish streaming cartesian-resolved joint command."""
         pub = self._streaming_pubs.get(arm_name)
+        if pub is None:
+            raise ValueError(f"No streaming publisher for arm: {arm_name}")
         if pub is not None:
             point = JointTrajectoryPoint()
             point.positions = np.asarray(position).tolist()
@@ -233,23 +249,131 @@ class HardwareContext:
 
     # -- Internal -----------------------------------------------------------
 
-    def _execute_trajectory(self, traj: Trajectory) -> bool:
-        """Send a single trajectory to the appropriate arm controller."""
+    def _execute_trajectories(
+        self,
+        trajectories: list[Trajectory],
+        *,
+        abort_fn: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Execute one or more arm trajectories, synchronized to a shared
+        start time, with cancel-on-sibling-failure and abort_fn support.
+
+        A single trajectory takes the same path minus the threading/shared-
+        stamp overhead -- there's no sibling to synchronize against, but the
+        correctness-relevant logic (abort_fn, cancellation) is identical.
+        """
+        if not trajectories:
+            return True
+
+        if abort_fn is not None and abort_fn():
+            return False
+
+        if len(trajectories) == 1:
+            return self._execute_single(trajectories[0], abort_fn=abort_fn)
+
+        first_timestamps = trajectories[0].timestamps
+        for i, traj in enumerate(trajectories[1:], start=1):
+            if not np.allclose(traj.timestamps, first_timestamps):
+                raise ValueError(
+                    f"Trajectory {i} timestamps do not match trajectory 0: "
+                    f"{traj.timestamps} vs {first_timestamps}"
+                )
+
+        # ONE stamp, computed once, shared by every arm.
+        buffer_sec = getattr(self._config, "sync_start_buffer_sec", 0.15)
+        start_stamp = (
+            self._node.get_clock().now() + rclpy.duration.Duration(seconds=buffer_sec)
+        ).to_msg()
+
+        results: list[bool] = [False] * len(trajectories)
+        errors: list[Exception] = []
+        cancel_event = threading.Event()
+
+        def run(index: int, traj: Trajectory) -> None:
+            try:
+                results[index] = self._execute_single(
+                    traj, start_stamp=start_stamp, abort_fn=abort_fn, cancel_event=cancel_event,
+                )
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                if not results[index]:
+                    cancel_event.set()  # tell every sibling thread to cancel
+
+        threads = [
+            threading.Thread(target=run, args=(i, t), daemon=True)
+            for i, t in enumerate(trajectories)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        if errors:
+            raise errors[0]
+        return all(results)
+
+    def _execute_single(
+        self,
+        traj: Trajectory,
+        *,
+        start_stamp=None,
+        abort_fn: Callable[[], bool] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> bool:
+        """Send one trajectory and wait for it, honoring abort_fn and a
+        shared cancel_event set by a sibling arm's failure."""
         entity = traj.entity
         if entity is None:
             raise ValueError("Trajectory has no entity set")
 
-        # Map entity to arm name (e.g. "left_arm" -> "left", "left" -> "left")
-        arm_name = entity.replace("_arm", "")
-        client = self._arm_clients.get(arm_name)
-        if client is None:
-            # Try exact entity name
-            client = self._arm_clients.get(entity)
+        if cancel_event is not None and cancel_event.is_set():
+            logger.info("Skipping %s: sibling already failed before send", entity)
+            return False
+
+        client = self._arm_clients.get(entity)
         if client is None:
             raise ValueError(f"No trajectory client for entity: {entity}")
 
-        msg = trajectory_to_msg(traj)
-        return client.send_trajectory(msg, timeout_sec=self._config.action_timeout)
+        msg = trajectory_to_msg(traj, start_stamp=start_stamp)
+        goal_handle = client.send_goal(msg)
+        if goal_handle is None:
+            return False
+
+        result_future = goal_handle.get_result_async()
+        poll_interval = 0.02
+        deadline = time.monotonic() + self._config.action_timeout
+
+        while not result_future.done():
+            if cancel_event is not None and cancel_event.is_set():
+                goal_handle.cancel_goal_async()
+                logger.info("Cancelling %s: sibling arm failed or aborted", entity)
+                return False
+            if abort_fn is not None and abort_fn():
+                goal_handle.cancel_goal_async()
+                logger.info("Cancelling %s: abort_fn triggered", entity)
+                if cancel_event is not None:
+                    cancel_event.set()
+                return False
+            if time.monotonic() > deadline:
+                goal_handle.cancel_goal_async()
+                logger.warning("Trajectory execution timed out on %s", entity)
+                if cancel_event is not None:
+                    cancel_event.set()
+                return False
+            time.sleep(poll_interval)
+
+        result = result_future.result()
+        if result is None:
+            logger.warning("Trajectory execution timed out on %s", entity)
+            return False
+
+        error_code = result.result.error_code
+        if error_code != FollowJointTrajectory.Result.SUCCESSFUL:
+            logger.warning("Trajectory execution failed on %s: error_code=%d", entity, error_code)
+            return False
+
+        return True
 
     def _status_callback(self, msg: Bool) -> None:
         self._robot_status = msg.data
