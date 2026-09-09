@@ -16,7 +16,8 @@ from control_msgs.action import FollowJointTrajectory
 from rclpy.action import ActionClient
 from trajectory_msgs.msg import JointTrajectory
 
-from mj_manipulator_ros.interfaces import follow_joint_trajectory_action, wait_for_future
+from mj_manipulator_ros.config import ArmHardwareConfig
+from mj_manipulator_ros.interfaces import follow_joint_trajectory_action_for_controller, wait_for_future
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +25,12 @@ logger = logging.getLogger(__name__)
 class ArmTrajectoryClient:
     """Action client for sending trajectories to an arm controller."""
 
-    def __init__(self, node: rclpy.node.Node, arm_name: str):
+    def __init__(self, node: rclpy.node.Node, arm_config: ArmHardwareConfig):
         self._node = node
-        self._arm_name = arm_name
-        self._action_name = follow_joint_trajectory_action(arm_name)
+        self._arm_name = arm_config.name
+        self._action_name = arm_config.follow_joint_trajectory_action or follow_joint_trajectory_action_for_controller(
+            arm_config.joint_trajectory_controller
+        )
 
         self._client = ActionClient(
             node,

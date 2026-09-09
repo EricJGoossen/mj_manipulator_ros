@@ -22,7 +22,12 @@ def wait_for_future(future, timeout_sec: float):
 
 def follow_joint_trajectory_action(arm_name: str) -> str:
     """FollowJointTrajectory action server name for an arm."""
-    return f"/{arm_name}_controller/follow_joint_trajectory"
+    return follow_joint_trajectory_action_for_controller(f"{arm_name}_controller")
+
+
+def follow_joint_trajectory_action_for_controller(controller_name: str) -> str:
+    """FollowJointTrajectory action server name for a given controller."""
+    return f"/{controller_name}/follow_joint_trajectory"
 
 
 def gripper_command_action(arm_name: str) -> str:

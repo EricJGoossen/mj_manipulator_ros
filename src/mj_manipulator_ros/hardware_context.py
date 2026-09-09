@@ -73,6 +73,7 @@ class HardwareContext:
 
         # Initialized in __enter__
         self._node = None
+        self._executor = None
         self._spin_thread = None
         self._state_listener = None
         self._arm_clients: dict[str, ArmTrajectoryClient] = {}
@@ -88,6 +89,15 @@ class HardwareContext:
             rclpy.init()
 
         self._node = rclpy.create_node(self._node_name)
+        # TODO(review): dedicated executor, not the implicit global one --
+        # see _spin_loop() below for why. Confirmed to matter: Stage 6
+        # hw_validation's phase_concurrent_independent runs two
+        # HardwareContext instances' spin threads concurrently (one per
+        # arm) and hit "RuntimeError: Executor is already spinning" +
+        # a real "Timed out waiting for /joint_states" on the other arm
+        # when both shared the global executor.
+        self._executor = rclpy.executors.SingleThreadedExecutor()
+        self._executor.add_node(self._node)
 
         # Joint state listener
         self._state_listener = JointStateListener(self._node)
@@ -105,7 +115,7 @@ class HardwareContext:
             name = arm_config.name
 
             # Trajectory action client
-            self._arm_clients[name] = ArmTrajectoryClient(self._node, name)
+            self._arm_clients[name] = ArmTrajectoryClient(self._node, arm_config)
 
             # Gripper action client
             gripper_client = None
@@ -159,6 +169,9 @@ class HardwareContext:
         self._running = False
         if self._spin_thread is not None:
             self._spin_thread.join(timeout=2.0)
+        if self._executor is not None:
+            self._executor.shutdown()
+            self._executor = None
         if self._node is not None:
             self._node.destroy_node()
             self._node = None
@@ -379,6 +392,21 @@ class HardwareContext:
         self._robot_status = msg.data
 
     def _spin_loop(self) -> None:
-        """Background thread: spin the ROS 2 node for callbacks."""
+        """Background thread: spin the ROS 2 node for callbacks.
+
+        TODO(review): calls self._executor.spin_once() directly rather than
+        the rclpy.spin_once(node) free function -- that free function
+        defaults to a single GLOBAL executor shared by the whole process
+        when no `executor=` is passed (see rclpy/__init__.py's spin_once:
+        `executor = get_global_executor() if executor is None else executor`),
+        and rclpy's own docstring warns it "should not be called from
+        multiple threads with the same node or executor argument". Every
+        other stage only ever has one HardwareContext active at a time, so
+        this never surfaced -- CONFIRMED to break (RuntimeError: Executor is
+        already spinning, plus a real /joint_states timeout on the other
+        arm) once two HardwareContext instances' spin loops run
+        concurrently, which only happens in Stage 6 hw_validation's
+        phase_concurrent_independent (two arms dispatched on two threads).
+        """
         while self._running and rclpy.ok():
-            rclpy.spin_once(self._node, timeout_sec=0.01)
+            self._executor.spin_once(timeout_sec=0.01)
