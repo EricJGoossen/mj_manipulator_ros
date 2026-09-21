@@ -18,12 +18,8 @@ class ArmHardwareConfig:
     gripper_open: float = 0.0
     gripper_closed: float = 0.255  # Robotiq 2F-140 max travel (meters)
     # ros2_control controller that owns this arm's FollowJointTrajectory
-    # action server. Defaults to the "{name}_controller" convention;
-    # override when a real deployment's controller name diverges from it.
+    # action server. Defaults to the "{name}_controller" convention
     joint_trajectory_controller: str | None = None
-    # Explicit action path override, for the rare case where the action
-    # itself isn't at "/{joint_trajectory_controller}/follow_joint_trajectory".
-    follow_joint_trajectory_action: str | None = None
 
     def __post_init__(self) -> None:
         if self.joint_trajectory_controller is None:

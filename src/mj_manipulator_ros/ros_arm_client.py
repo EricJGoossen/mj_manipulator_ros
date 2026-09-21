@@ -28,9 +28,7 @@ class ArmTrajectoryClient:
     def __init__(self, node: rclpy.node.Node, arm_config: ArmHardwareConfig):
         self._node = node
         self._arm_name = arm_config.name
-        self._action_name = arm_config.follow_joint_trajectory_action or follow_joint_trajectory_action_for_controller(
-            arm_config.joint_trajectory_controller
-        )
+        self._action_name = follow_joint_trajectory_action_for_controller(arm_config.joint_trajectory_controller)
 
         self._client = ActionClient(
             node,
