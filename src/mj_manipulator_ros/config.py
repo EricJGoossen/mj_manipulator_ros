@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 @dataclass
@@ -20,10 +21,24 @@ class ArmHardwareConfig:
     # ros2_control controller that owns this arm's FollowJointTrajectory
     # action server. Defaults to the "{name}_controller" convention
     joint_trajectory_controller: str | None = None
+    # Action interface the gripper controller actually serves. Grippers
+    # driven by a dedicated gripper_action_controller (e.g. a Robotiq
+    # gripper) use "gripper_command" (control_msgs/GripperCommand); grippers
+    # driven by a plain joint_trajectory_controller (e.g. OpenArm's
+    # parallel-jaw gripper) use "follow_joint_trajectory" instead, which
+    # requires gripper_joint_name to be set.
+    gripper_interface: Literal["gripper_command", "follow_joint_trajectory"] = "gripper_command"
+    # Required when gripper_interface == "follow_joint_trajectory" -- the
+    # single joint name the gripper controller's trajectory goal targets.
+    gripper_joint_name: str | None = None
 
     def __post_init__(self) -> None:
         if self.joint_trajectory_controller is None:
             self.joint_trajectory_controller = f"{self.name}_controller"
+        if self.gripper_interface == "follow_joint_trajectory" and self.gripper_joint_name is None:
+            raise ValueError(
+                "gripper_joint_name is required when gripper_interface == 'follow_joint_trajectory'"
+            )
 
 
 @dataclass

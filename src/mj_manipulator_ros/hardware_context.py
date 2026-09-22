@@ -44,7 +44,7 @@ from mj_manipulator_ros.interfaces import (
     joint_commands_topic,
 )
 from mj_manipulator_ros.ros_arm_client import ArmTrajectoryClient
-from mj_manipulator_ros.ros_gripper_client import GripperClient
+from mj_manipulator_ros.ros_gripper_client import GripperClient, TrajectoryGripperClient
 from mj_manipulator_ros.ros_state_listener import JointStateListener
 from mj_manipulator_ros.trajectory_convert import trajectory_to_msg
 
@@ -120,7 +120,10 @@ class HardwareContext:
             # Gripper action client
             gripper_client = None
             if arm_config.has_gripper:
-                gripper_client = GripperClient(self._node, name)
+                if arm_config.gripper_interface == "follow_joint_trajectory":
+                    gripper_client = TrajectoryGripperClient(self._node, name, arm_config.gripper_joint_name)
+                else:
+                    gripper_client = GripperClient(self._node, name)
                 self._gripper_clients[name] = gripper_client
 
             # Arm controller
